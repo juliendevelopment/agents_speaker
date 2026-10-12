@@ -259,3 +259,8 @@ gsettings --schemadir ~/.local/share/gnome-shell/extensions/agent-speak@juliende
 | playback slow to start | `systemctl --user status piper-tts` (otherwise falls back to the piper command) |
 | unexpected text read | `cat $XDG_RUNTIME_DIR/agent-speak/last.txt` |
 | icon missing | log back in; `gnome-extensions info agent-speak@juliendevelopment`; `journalctl --user -b \| grep -i agent-speak` |
+
+## License
+
+[MIT](LICENSE). Piper and the Piper voices are not part of this repository: they are downloaded
+during installation and keep their own licenses.
