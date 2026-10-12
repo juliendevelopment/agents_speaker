@@ -1,0 +1,11 @@
+{
+  "description": "agent-speak : lecture vocale FR/EN des réponses (Piper)",
+  "hooks": {
+    "Stop": [
+      { "hooks": [ { "type": "command", "command": "agent-speak", "timeout": 10 } ] }
+    ],
+    "UserPromptSubmit": [
+      { "hooks": [ { "type": "command", "command": "agent-speak --stop", "timeout": 5 } ] }
+    ]
+  }
+}

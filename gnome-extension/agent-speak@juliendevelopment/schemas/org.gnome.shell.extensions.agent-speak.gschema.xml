@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="org.gnome.shell.extensions.agent-speak" path="/org/gnome/shell/extensions/agent-speak/">
+    <key name="stop-shortcut" type="as">
+      <default><![CDATA[['<Super><Shift>x']]]></default>
+      <summary>Raccourci pour arrêter la lecture</summary>
+      <description>Combinaison de touches qui coupe la lecture en cours (liste vide = désactivé).</description>
+    </key>
+  </schema>
+</schemalist>

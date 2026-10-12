@@ -1,0 +1,10 @@
+[Unit]
+Description=Piper TTS HTTP server (agent-speak)
+
+[Service]
+ExecStart=%h/.local/share/uv/tools/piper-tts/bin/python -m piper.http_server --host 127.0.0.1 --port 5005 -m fr_FR-siwis-medium --data-dir %h/.local/share/piper-voices
+ExecStartPost=/bin/sh -c "for i in $(seq 60); do curl -sf -X POST -H Content-Type:application/json -d '{\"text\":\"ok\",\"voice\":\"en_US-lessac-medium\"}' http://127.0.0.1:5005/synthesize -o /dev/null && exit 0; sleep 1; done; exit 0"
+Restart=on-failure
+
+[Install]
+WantedBy=default.target

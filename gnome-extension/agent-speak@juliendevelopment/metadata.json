@@ -1,0 +1,8 @@
+{
+  "uuid": "agent-speak@juliendevelopment",
+  "name": "Agent Speak",
+  "description": "Arrête la lecture vocale des réponses des agents (agent-speak), l'active ou la désactive, avec un raccourci clavier configurable.",
+  "shell-version": ["50"],
+  "settings-schema": "org.gnome.shell.extensions.agent-speak",
+  "version": 2
+}

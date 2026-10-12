@@ -1,0 +1,10 @@
+{
+  "agent-speak": {
+    "Stop": [
+      { "type": "command", "command": "agent-speak", "timeout": 10 }
+    ],
+    "PreInvocation": [
+      { "type": "command", "command": "agent-speak --stop", "timeout": 5 }
+    ]
+  }
+}

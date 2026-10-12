@@ -1,0 +1,170 @@
+#!/usr/bin/env python3
+"""agent-speak : lit à voix haute la dernière réponse d'un agent CLI (FR/EN, Piper, local).
+
+Hook commun à Claude Code, Codex et Antigravity CLI (agy) :
+  - Claude Code / Codex : le JSON du hook Stop contient `last_assistant_message`.
+  - agy : le JSON contient `transcriptPath` ; on lit la dernière réponse du modèle dans ce JSONL.
+
+Usage :
+  agent-speak                 # hook : lit le JSON sur stdin, parle en arrière-plan, rend la main tout de suite
+  agent-speak --stop          # coupe la lecture en cours (hook UserPromptSubmit / PreInvocation)
+  agent-speak --say "texte"   # test manuel
+  agent-speak --mute | --unmute | --toggle
+
+Variables d'environnement :
+  AGENT_SPEAK_MAX     nb max de caractères lus, 0 = pas de limite (défaut 0)
+  AGENT_SPEAK_SPEED   vitesse, >1 = plus lent (défaut 0.9)
+  AGENT_SPEAK_VOICE_FR / AGENT_SPEAK_VOICE_EN   voix Piper
+  AGENT_SPEAK_VOICES  dossier des voix (défaut ~/.local/share/piper-voices)
+  AGENT_SPEAK_SERVER  serveur Piper HTTP (défaut http://127.0.0.1:5005, service systemd piper-tts)
+"""
+import json
+import os
+import re
+import shutil
+import signal
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+HOME = Path.home()
+VOICES = Path(os.environ.get("AGENT_SPEAK_VOICES", HOME / ".local/share/piper-voices"))
+VOICE = {
+    "fr": os.environ.get("AGENT_SPEAK_VOICE_FR", "fr_FR-siwis-medium"),
+    "en": os.environ.get("AGENT_SPEAK_VOICE_EN", "en_US-lessac-medium"),
+}
+MAX = int(os.environ.get("AGENT_SPEAK_MAX", "0"))
+SPEED = os.environ.get("AGENT_SPEAK_SPEED", "0.9")
+SERVER = os.environ.get("AGENT_SPEAK_SERVER", "http://127.0.0.1:5005")
+PIPER = os.environ.get("AGENT_SPEAK_PIPER", str(HOME / ".local/bin/piper"))
+RUN = Path(os.environ.get("XDG_RUNTIME_DIR", tempfile.gettempdir())) / "agent-speak"
+PIDFILE = RUN / "pid"
+MUTED = HOME / ".config/agent-speak/muted"
+
+FR_WORDS = set("le la les un une des du de et est sont pas que qui pour dans sur avec ce cette ces je tu il nous vous ils fait faire mais ou donc car aussi plus très peux peut j'ai c'est voici voilà fichier".split())
+EN_WORDS = set("the a an and is are not that which for in on with this these i you it we they do does but or so also more very can i've it's here file was were be have has".split())
+
+
+def stop():
+    try:
+        pgid = int(PIDFILE.read_text())
+        os.killpg(pgid, signal.SIGTERM)
+    except (OSError, ValueError):
+        pass
+    PIDFILE.unlink(missing_ok=True)
+    for d in RUN.glob("tmp*"):
+        shutil.rmtree(d, ignore_errors=True)
+
+
+def text_from_agy(path):
+    """Dernière réponse finale du modèle dans le transcript JSONL d'agy."""
+    last = None
+    try:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                try:
+                    e = json.loads(line)
+                except ValueError:
+                    continue
+                if e.get("type") == "PLANNER_RESPONSE" and e.get("content"):
+                    last = e["content"]
+    except OSError:
+        pass
+    return last
+
+
+def extract(payload):
+    msg = payload.get("last_assistant_message")
+    if msg:
+        return msg
+    path = payload.get("transcriptPath")
+    if path:
+        return text_from_agy(path)
+    return None
+
+
+def clean(md):
+    t = re.sub(r"```.*?```", " ", md, flags=re.S)           # blocs de code
+    t = re.sub(r"!?\[([^\]]*)\]\([^)]*\)", r"\1", t)          # liens -> texte
+    t = re.sub(r"https?://\S+", " ", t)                       # URLs
+    t = re.sub(r"`([^`]*)`", r"\1", t)                        # code inline
+    t = re.sub(r"^\s*\|?[\s:|-]+\|[\s:|-]*$", " ", t, flags=re.M)  # séparateurs de tableau
+    t = t.replace("|", ", ")
+    t = re.sub(r"^\s{0,3}(#{1,6}|[-*+>]|\d+\.)\s+", "", t, flags=re.M)  # titres, puces
+    t = re.sub(r"[*_~]{1,3}", "", t)                           # emphase
+    t = re.sub(r"\s*\n\s*\n\s*", ". ", t)
+    t = re.sub(r"\s+", " ", t).strip()
+    t = re.sub(r"(\.\s*){2,}", ". ", t)
+    if MAX and len(t) > MAX:
+        cut = t[:MAX]
+        end = max(cut.rfind(". "), cut.rfind("! "), cut.rfind("? "), cut.rfind(" : "))
+        t = cut[: end + 1] if end > MAX // 3 else cut.rsplit(" ", 1)[0] + "…"
+    return t
+
+
+def lang(t):
+    words = re.findall(r"[a-zà-ÿ']+", t.lower())
+    fr = sum(w in FR_WORDS for w in words) + 2 * len(re.findall(r"[éèêàùçôî]", t.lower()))
+    en = sum(w in EN_WORDS for w in words)
+    return "fr" if fr >= en else "en"
+
+
+def speak(text):
+    if MUTED.exists() or not text:
+        return
+    text = clean(text)
+    if not text:
+        return
+    voice = VOICE[lang(text)]
+    stop()
+    RUN.mkdir(parents=True, exist_ok=True)
+    (RUN / "last.txt").write_text(f"[{voice}] {text}\n", encoding="utf-8")  # debug : dernier texte lu
+    base = tempfile.mkdtemp(dir=RUN)
+    txt, req, wav = (os.path.join(base, n) for n in ("in.txt", "req.json", "out.wav"))
+    Path(txt).write_text(text, encoding="utf-8")
+    Path(req).write_text(json.dumps({"text": text, "voice": voice, "length_scale": float(SPEED)}), encoding="utf-8")
+    cfg = json.loads((VOICES / f"{voice}.onnx.json").read_text())
+    rate = str(cfg["audio"]["sample_rate"])
+    q = subprocess.list2cmdline
+    # 1) serveur Piper (voix déjà chargées, ~1 s) ; 2) sinon, commande piper (~5 s)
+    sh = (
+        f"if curl -sf -m 600 -X POST -H 'Content-Type: application/json' --data-binary @{q([req])} {SERVER}/synthesize -o {q([wav])};"
+        f" then pw-play {q([wav])};"
+        f" else {q([PIPER, '-m', voice, '--data-dir', str(VOICES), '--length-scale', SPEED, '-i', txt, '--output-raw'])}"
+        f" 2>/dev/null | pw-play --rate {rate} --channels 1 --format s16 - ; fi; rm -rf {q([base])}"
+    )
+    p = subprocess.Popen(["sh", "-c", sh], start_new_session=True,
+                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    PIDFILE.write_text(str(p.pid))
+
+
+def main():
+    a = sys.argv[1:]
+    if a[:1] == ["--stop"]:
+        stop()
+    elif a[:1] == ["--say"]:
+        speak(" ".join(a[1:]))
+    elif a[:1] in (["--mute"], ["--unmute"], ["--toggle"]):
+        on = a[0] == "--mute" or (a[0] == "--toggle" and not MUTED.exists())
+        if on:
+            MUTED.parent.mkdir(parents=True, exist_ok=True)
+            MUTED.touch()
+            stop()
+        else:
+            MUTED.unlink(missing_ok=True)
+        print("agent-speak :", "muet" if on else "actif", file=sys.stderr)
+    else:
+        try:
+            payload = json.load(sys.stdin)
+        except ValueError:
+            payload = {}
+        speak(extract(payload))
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception as e:  # un hook ne doit jamais casser l'agent
+        print(f"agent-speak: {e}", file=sys.stderr)
+    sys.exit(0)
